@@ -26,11 +26,11 @@ use risingwave_common::util::sort_util::{OrderPair, OrderType};
 use risingwave_storage::table::streaming_table::state_table::StateTable;
 use risingwave_storage::StateStore;
 
-use super::error::StreamExecutorResult;
-use super::managed_state::top_n::ManagedTopNState;
-use super::top_n::{generate_executor_pk_indices_info, TopNCache};
-use super::top_n_executor::{generate_output, TopNExecutorBase, TopNExecutorWrapper};
-use super::{Executor, ExecutorInfo, PkIndices, PkIndicesRef};
+use super::utils::*;
+use super::TopNCache;
+use crate::executor::error::StreamExecutorResult;
+use crate::executor::managed_state::top_n::ManagedTopNState;
+use crate::executor::{Executor, ExecutorInfo, PkIndices, PkIndicesRef};
 
 pub type GroupTopNExecutor<S> = TopNExecutorWrapper<InnerGroupTopNExecutorNew<S>>;
 
