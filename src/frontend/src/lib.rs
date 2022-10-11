@@ -86,6 +86,9 @@ pub struct FrontendOpts {
     /// No given `config_path` means to use default config.
     #[clap(long, default_value = "")]
     pub config_path: String,
+
+    #[clap(long, default_value = "127.0.0.1:2222")]
+    pub prometheus_listener_addr: String,
 }
 
 impl Default for FrontendOpts {
@@ -99,6 +102,14 @@ use std::pin::Pin;
 
 /// Start frontend
 pub fn start(opts: FrontendOpts) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    let registry = Registry::new();
+    if opts.metrics_level > 0 {
+        MetricsManager::boot_metrics_service(
+            opts.prometheus_listener_addr.clone(),
+            Arc::new(registry),
+        );
+    }
+    monitor_process(&registry).unwrap();
     // WARNING: don't change the function signature. Making it `async fn` will cause
     // slow compile in release mode.
     Box::pin(async move {

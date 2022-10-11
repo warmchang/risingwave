@@ -76,6 +76,8 @@ pub struct FrontendConfig {
 
     pub provide_meta_node: Option<Vec<MetaNodeConfig>>,
     pub user_managed: bool,
+
+    pub exporter_port: u16,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -160,6 +162,7 @@ pub struct PrometheusConfig {
     pub provide_minio: Option<Vec<MinioConfig>>,
     pub provide_compactor: Option<Vec<CompactorConfig>>,
     pub provide_etcd: Option<Vec<EtcdConfig>>,
+    pub provide_frontend: Option<Vec<FrontendConfig>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

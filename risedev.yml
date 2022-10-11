@@ -435,6 +435,8 @@ template:
     # Etcd used by this Prometheus instance
     provide-etcd: "etcd*"
 
+    provide-frontend: "frontend*"
+
   frontend:
     # Advertise address of frontend
     address: "127.0.0.1"
@@ -453,6 +455,8 @@ template:
 
     # If `user-managed` is true, this service will be started by user with the above config
     user-managed: false
+
+    exporter-port: 2222
 
   compactor:
     # Compactor advertise address
