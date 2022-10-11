@@ -101,6 +101,10 @@ scrape_configs:
   - job_name: etcd-job
     static_configs:
       - targets: [{etcd_targets}]
+
+  - job_name: frontend-job
+    static_configs:
+      - targets: [{frontend_targets}]
 "#,
         )
     }

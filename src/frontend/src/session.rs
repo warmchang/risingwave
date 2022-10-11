@@ -25,7 +25,7 @@ use parking_lot::RwLock;
 use pgwire::pg_response::PgResponse;
 use pgwire::pg_server::{BoxedError, Session, SessionManager};
 use risingwave_common::config::FrontendConfig;
-use risingwave_common::error::{ErrorCode, Result, RwError};
+use risingwave_common::error::{Result, RwError};
 use risingwave_common::session_config::{DELTA_JOIN, IMPLICIT_FLUSH, QUERY_MODE};
 use risingwave_common::util::addr::HostAddr;
 use risingwave_pb::common::WorkerType;

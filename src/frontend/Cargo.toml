@@ -39,6 +39,7 @@ risingwave_pb = { path = "../prost" }
 risingwave_rpc_client = { path = "../rpc_client" }
 risingwave_source = { path = "../source" }
 risingwave_sqlparser = { path = "../sqlparser" }
+prometheus = { version = "0.13", features = ["process"] }
 risingwave_storage = { path = "../storage" }
 serde_json = "1"
 sha2 = "0.10.2"

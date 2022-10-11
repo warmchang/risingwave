@@ -64,6 +64,9 @@ use std::sync::Arc;
 
 use clap::Parser;
 use pgwire::pg_server::pg_serve;
+use prometheus::Registry;
+use risingwave_common::service::MetricsManager;
+use risingwave_storage::monitor::monitor_process;
 use session::SessionManagerImpl;
 
 #[derive(Parser, Clone, Debug)]
@@ -103,12 +106,10 @@ use std::pin::Pin;
 /// Start frontend
 pub fn start(opts: FrontendOpts) -> Pin<Box<dyn Future<Output = ()> + Send>> {
     let registry = Registry::new();
-    if opts.metrics_level > 0 {
-        MetricsManager::boot_metrics_service(
-            opts.prometheus_listener_addr.clone(),
-            Arc::new(registry),
-        );
-    }
+    MetricsManager::boot_metrics_service(
+        opts.prometheus_listener_addr.clone(),
+        Arc::new(registry.clone()),
+    );
     monitor_process(&registry).unwrap();
     // WARNING: don't change the function signature. Making it `async fn` will cause
     // slow compile in release mode.
