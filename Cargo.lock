@@ -3286,7 +3286,7 @@ dependencies = [
 [[package]]
 name = "pulsar"
 version = "4.1.1"
-source = "git+https://github.com/singularity-data/pulsar-rs.git?rev=8d4789eea780d520136e1cc2535a1fec9385c53d#8d4789eea780d520136e1cc2535a1fec9385c53d"
+source = "git+https://github.com/skyzh/pulsar-rs?rev=8d4789eea780d520136e1cc2535a1fec9385c53d#8d4789eea780d520136e1cc2535a1fec9385c53d"
 dependencies = [
  "bit-vec",
  "bytes",

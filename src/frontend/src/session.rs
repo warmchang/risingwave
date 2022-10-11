@@ -375,10 +375,10 @@ impl SessionImpl {
     /// For example, `set_config("RW_IMPLICIT_FLUSH", true)` will implicit flush for every inserts.
     pub fn set_config(&self, key: &str, val: &str) -> Result<()> {
         let lower_key = key.to_ascii_lowercase();
-        self.config_map
-            .read()
-            .get(&lower_key)
-            .ok_or_else(|| ErrorCode::UnrecognizedConfigurationParameter(key.to_string()))?;
+        // self.config_map
+        //     .read()
+        //     .get(&lower_key)
+        //     .ok_or_else(|| ErrorCode::UnrecognizedConfigurationParameter(key.to_string()))?;
         self.config_map
             .write()
             .insert(lower_key, ConfigEntry::new(val.to_string()));

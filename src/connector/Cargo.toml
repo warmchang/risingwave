@@ -37,7 +37,7 @@ num-traits = "0.2"
 parse_duration = "2.1.1"
 paste = "1"
 prost = "0.10"
-pulsar = { git = "https://github.com/singularity-data/pulsar-rs.git", rev = "8d4789eea780d520136e1cc2535a1fec9385c53d", default-features = false, features = ["tokio-runtime"] }
+pulsar = { default-features = false, features = ["tokio-runtime"], rev = "8d4789eea780d520136e1cc2535a1fec9385c53d", git = "https://github.com/skyzh/pulsar-rs" }
 rand = "0.8"
 rdkafka = { version = "0.28", features = ["cmake-build"] }
 risingwave_common = { path = "../common" }
