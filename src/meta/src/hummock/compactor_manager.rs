@@ -240,7 +240,10 @@ impl CompactorManager {
         self.task_heartbeats.write().remove(&context_id).is_some()
     }
 
-    pub fn get_expired_tasks(&self) -> Vec<(HummockContextId, CompactTask)> {
+    pub fn get_expired_tasks(
+        &self,
+        split_cancel: Vec<HummockCompactionTaskId>,
+    ) -> Vec<(HummockContextId, CompactTask)> {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .expect("Clock may have gone backwards")
@@ -254,7 +257,7 @@ impl CompactorManager {
                         expire_at, task, ..
                     } in heartbeats.values()
                     {
-                        if *expire_at < now {
+                        if *expire_at < now || split_cancel.binary_search(&task.task_id).is_ok() {
                             cancellable_tasks.push((*context_id, task.clone()));
                         }
                     }
@@ -371,7 +374,7 @@ mod tests {
 
         // Ensure task is expired.
         tokio::time::sleep(Duration::from_secs(2)).await;
-        let expired = compactor_manager.get_expired_tasks();
+        let expired = compactor_manager.get_expired_tasks(vec![]);
         assert_eq!(expired.len(), 1);
         assert_eq!(expired[0].0, context_id);
 
@@ -384,7 +387,7 @@ mod tests {
                 num_ssts_uploaded: 0,
             }],
         );
-        assert_eq!(compactor_manager.get_expired_tasks().len(), 1);
+        assert_eq!(compactor_manager.get_expired_tasks(vec![]).len(), 1);
 
         // Mimic compaction heartbeat with invalid task id
         compactor_manager.update_task_heartbeats(
@@ -395,7 +398,7 @@ mod tests {
                 num_ssts_uploaded: 1,
             }],
         );
-        assert_eq!(compactor_manager.get_expired_tasks().len(), 1);
+        assert_eq!(compactor_manager.get_expired_tasks(vec![]).len(), 1);
 
         // Mimic effective compaction heartbeat
         compactor_manager.update_task_heartbeats(
@@ -406,7 +409,7 @@ mod tests {
                 num_ssts_uploaded: 1,
             }],
         );
-        assert_eq!(compactor_manager.get_expired_tasks().len(), 0);
+        assert_eq!(compactor_manager.get_expired_tasks(vec![]).len(), 0);
         assert!(compactor_manager.purge_heartbeats_for_context(context_id));
 
         // Test add
