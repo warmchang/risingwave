@@ -28,10 +28,7 @@ use openssl::ssl::{SslAcceptor, SslContext, SslContextRef, SslMethod};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_openssl::SslStream;
 use tracing::log::trace;
-<<<<<<< Updated upstream
-=======
 use tracing::warn;
->>>>>>> Stashed changes
 
 use crate::error::{PsqlError, PsqlResult};
 use crate::pg_extended::{PgPortal, PgStatement, PreparedStatement};
