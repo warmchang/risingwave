@@ -28,6 +28,10 @@ use openssl::ssl::{SslAcceptor, SslContext, SslContextRef, SslMethod};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_openssl::SslStream;
 use tracing::log::trace;
+<<<<<<< Updated upstream
+=======
+use tracing::warn;
+>>>>>>> Stashed changes
 
 use crate::error::{PsqlError, PsqlResult};
 use crate::pg_extended::{PgPortal, PgStatement, PreparedStatement};
@@ -662,6 +666,10 @@ where
         // SslStream. Later we can avoid storing stream inside PgProtocol to do this more
         // fluently.
         let stream = self.stream.take().unwrap();
+        if self.stream.is_none() {
+            warn!("Unable to set up a ssl connection");
+            return Err(PsqlError::Internal(anyhow!("SSL error"))); // Give actual errors here
+        }
         let ssl = openssl::ssl::Ssl::new(ssl_ctx).unwrap();
         let mut stream = tokio_openssl::SslStream::new(ssl, stream).unwrap();
         if let Err(e) = Pin::new(&mut stream).accept().await {
