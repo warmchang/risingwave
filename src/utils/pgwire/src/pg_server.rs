@@ -16,6 +16,7 @@ use std::io;
 use std::result::Result;
 use std::sync::Arc;
 
+use anyhow::anyhow;
 use futures::Stream;
 use tokio::net::TcpListener;
 
@@ -102,26 +103,30 @@ where
     let listener = TcpListener::bind(addr).await.unwrap();
     // accept connections and process them, spawning a new thread for each one
     tracing::info!("Server Listening at {}", addr);
+    let mut ssl_err = false;
     loop {
+        if ssl_err {
+            return Err(std::io::Error::new(io::ErrorKind::Other, "Fatal SSL error"));
+        }
         let session_mgr = session_mgr.clone();
         let conn_ret = listener.accept().await;
-        match conn_ret {
-            Ok((stream, peer_addr)) => {
-                tracing::info!("New connection: {}", peer_addr);
-                stream.set_nodelay(true)?;
-                let ssl_config = ssl_config.clone();
-                tokio::spawn(async move {
-                    // connection succeeded
-                    let mut pg_proto = PgProtocol::new(stream, session_mgr, ssl_config);
-                    while !pg_proto.process().await {}
-                    tracing::info!("Connection {} closed", peer_addr);
-                });
-            }
-
-            Err(e) => {
-                tracing::error!("Connection failure: {}", e);
-            }
+        if conn_ret.is_err() {
+            let e = conn_ret.err().unwrap();
+            return Err(e);
         }
+        let (stream, peer_addr) = conn_ret.unwrap();
+        tracing::info!("New connection: {}", peer_addr);
+        stream.set_nodelay(true)?;
+        let ssl_config = ssl_config.clone();
+        tokio::spawn(async move {
+            // connection succeeded
+            let mut pg_proto = PgProtocol::new(stream, session_mgr, ssl_config);
+            while !pg_proto.is_terminated().await {}
+            if !ssl_err {
+                ssl_err = pg_proto.has_ssl_error();
+            }
+            tracing::info!("Connection {} closed", peer_addr);
+        });
     }
 }
 

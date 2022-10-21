@@ -20,6 +20,7 @@ use std::str::Utf8Error;
 use std::sync::Arc;
 use std::{str, vec};
 
+use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
 use futures::stream::StreamExt;
 use futures::Stream;
@@ -52,6 +53,9 @@ where
     state: PgProtocolState,
     /// Whether the connection is terminated.
     is_terminate: bool,
+
+    // true if connection failed because of fatal SSL error
+    has_ssl_error: bool,
 
     session_mgr: Arc<SM>,
     session: Option<Arc<SM::Session>>,
@@ -137,6 +141,7 @@ where
             is_terminate: false,
             state: PgProtocolState::Startup,
             session_mgr,
+            has_ssl_error: false,
             session: None,
             unnamed_statement: None,
             unnamed_portal: None,
@@ -149,8 +154,16 @@ where
     }
 
     /// Processes one message. Returns true if the connection is terminated.
-    pub async fn process(&mut self) -> bool {
-        self.do_process().await || self.is_terminate
+    pub async fn is_terminated(&mut self) -> bool {
+        self.is_terminate || self.has_ssl_error || self.do_process().await
+    }
+
+    // true if fatal ssl_error exists
+    pub fn has_ssl_error(&mut self) -> bool {
+        if self.has_ssl_error {
+            self.is_terminate = true;
+        }
+        self.has_ssl_error
     }
 
     async fn do_process(&mut self) -> bool {
@@ -158,40 +171,57 @@ where
             Ok(v) => v,
             Err(e) => {
                 match e {
+                    // TODO: only write is stream is not is terminated
                     PsqlError::IoError(io_err) => {
                         if io_err.kind() == std::io::ErrorKind::UnexpectedEof {
+                            return true;
+                        }
+                        if self.is_terminate {
                             return true;
                         }
                     }
 
                     PsqlError::StartupError(_) | PsqlError::PasswordError(_) => {
                         // TODO: Fix the unwrap in this stream.
-                        self.stream
-                            .write_no_flush(&BeMessage::ErrorResponse(Box::new(e)))
-                            .unwrap();
+                        if !self.is_terminate {
+                            self.stream
+                                .write_no_flush(&BeMessage::ErrorResponse(Box::new(e)))
+                                .unwrap();
+                        }
                         return true;
                     }
 
                     PsqlError::QueryError(_) => {
-                        self.stream
-                            .write_no_flush(&BeMessage::ErrorResponse(Box::new(e)))
-                            .unwrap();
-                        self.stream
-                            .write_no_flush(&BeMessage::ReadyForQuery)
-                            .unwrap();
+                        if !self.is_terminate {
+                            self.stream
+                                .write_no_flush(&BeMessage::ErrorResponse(Box::new(e)))
+                                .unwrap();
+                            self.stream
+                                .write_no_flush(&BeMessage::ReadyForQuery)
+                                .unwrap();
+                        }
+                        if self.is_terminate {
+                            return true;
+                        }
                     }
 
                     PsqlError::Internal(_)
                     | PsqlError::ParseError(_)
                     | PsqlError::ExecuteError(_) => {
-                        self.stream
-                            .write_no_flush(&BeMessage::ErrorResponse(Box::new(e)))
-                            .unwrap();
+                        if !self.is_terminate {
+                            self.stream // TODO: use some marker is stream is valid
+                                .write_no_flush(&BeMessage::ErrorResponse(Box::new(e)))
+                                .unwrap();
+                        } else {
+                            return true;
+                        }
                     }
                 }
-                self.stream.flush().await.unwrap_or_else(|e| {
-                    tracing::error!("flush error: {}", e);
-                });
+                if !self.is_terminate {
+                    self.stream.flush().await.unwrap_or_else(|e| {
+                        tracing::error!("flush error: {}", e);
+                    });
+                }
                 false
             }
         }
@@ -214,6 +244,9 @@ where
             FeMessage::Close(m) => self.process_close_msg(m)?,
             FeMessage::Flush => self.stream.flush().await?,
         }
+        if self.is_terminate {
+            return Err(PsqlError::Internal(anyhow!("Stream terminated")));
+        }
         self.stream.flush().await?;
         Ok(false)
     }
@@ -230,7 +263,11 @@ where
             // If got and ssl context, say yes for ssl connection.
             // Construct ssl stream and replace with current one.
             self.stream.write(&BeMessage::EncryptionResponseYes).await?;
-            let ssl_stream = self.stream.ssl(context).await;
+            let ssl_stream = self.stream.ssl(context).await; // change stuff here?
+            if ssl_stream.stream.is_none() {
+                self.is_terminate = true;
+                self.has_ssl_error = true;
+            }
             self.stream = Conn::Ssl(ssl_stream);
         } else {
             // If no, say no for encryption.
@@ -628,7 +665,11 @@ where
         let ssl = openssl::ssl::Ssl::new(ssl_ctx).unwrap();
         let mut stream = tokio_openssl::SslStream::new(ssl, stream).unwrap();
         if let Err(e) = Pin::new(&mut stream).accept().await {
-            panic!("Unable to set up a ssl connection, reason: {}", e);
+            tracing::error!("Unable to establish the SSL connection. Error was '{}'", e);
+            return PgStream {
+                stream: None,
+                write_buf: BytesMut::with_capacity(0),
+            };
         }
 
         PgStream {
