@@ -303,7 +303,7 @@ where
     /// Build the context for rescheduling and do some validation for the request.
     async fn build_reschedule_context(
         &self,
-        reschedule: &HashMap<FragmentId, ParallelUnitReschedule>,
+        reschedule: &mut HashMap<FragmentId, ParallelUnitReschedule>,
     ) -> MetaResult<RescheduleContext> {
         // Index worker node, used to create actor
         let worker_nodes: HashMap<WorkerId, WorkerNode> = self
@@ -333,6 +333,7 @@ where
             .collect();
 
         let mut chain_fragment_ids = HashSet::new();
+        let mut mv_fragment_ids = HashSet::new();
         let mut actor_map = HashMap::new();
         let mut fragment_map = HashMap::new();
         let mut actor_status = BTreeMap::new();
@@ -346,6 +347,7 @@ where
             fragment_map.extend(table_fragments.fragments.clone());
             actor_map.extend(table_fragments.actor_map());
             chain_fragment_ids.extend(table_fragments.chain_fragment_ids());
+            mv_fragment_ids.extend(table_fragments.mv_fragment_ids());
             actor_status.extend(table_fragments.actor_status.clone());
         }
 
@@ -384,13 +386,14 @@ where
 
         let mut stream_source_fragment_ids = HashSet::new();
 
+        let mut chain_reschedule = HashMap::new();
         for (
             fragment_id,
             ParallelUnitReschedule {
                 added_parallel_units,
                 removed_parallel_units,
             },
-        ) in reschedule
+        ) in reschedule.iter()
         {
             let fragment = fragment_map
                 .get(fragment_id)
@@ -407,6 +410,34 @@ where
             if chain_fragment_ids.contains(fragment_id) {
                 bail!("rescheduling Chain is not supported");
             }
+
+            if mv_fragment_ids.contains(fragment_id) {
+                let mut downstream_fragments = downstream_fragment_id_map
+                    .get(fragment_id)
+                    .unwrap()
+                    .iter()
+                    .cloned()
+                    .collect_vec();
+                while let Some(downstream_id) = downstream_fragments.pop() {
+                    if !chain_fragment_ids.contains(&downstream_id) {
+                        continue;
+                    }
+                    downstream_fragments.extend(
+                        downstream_fragment_id_map
+                            .get(&downstream_id)
+                            .unwrap()
+                            .iter(),
+                    );
+                    chain_reschedule.insert(
+                        downstream_id,
+                        ParallelUnitReschedule {
+                            added_parallel_units: added_parallel_units.clone(),
+                            removed_parallel_units: removed_parallel_units.clone(),
+                        },
+                    );
+                }
+            }
+
             match fragment.get_fragment_type()? {
                 FragmentType::Source => {
                     let stream_node = fragment.actors.first().unwrap().get_nodes().unwrap();
@@ -460,6 +491,8 @@ where
             }
         }
 
+        reschedule.extend(chain_reschedule.into_iter());
+
         Ok(RescheduleContext {
             parallel_unit_id_to_worker_id,
             actor_map,
@@ -492,9 +525,9 @@ where
     async fn reschedule_actors_impl(
         &self,
         revert_funcs: &mut Vec<BoxFuture<'_, ()>>,
-        reschedule: HashMap<FragmentId, ParallelUnitReschedule>,
+        mut reschedule: HashMap<FragmentId, ParallelUnitReschedule>,
     ) -> MetaResult<()> {
-        let ctx = self.build_reschedule_context(&reschedule).await?;
+        let ctx = self.build_reschedule_context(&mut reschedule).await?;
         // Index of actors to create/remove
         // Fragment Id => ( Actor Id => Parallel Unit Id )
 
