@@ -132,6 +132,8 @@ pub struct HummockStorage {
 
     storage_core: HummockStorageV2,
 
+    // storage_mapping: RwLock<HashMap<TableId, HashMap<InstanceId,
+    // Arc<RwLock<HummockStorageV2>>>>>;
     version_update_notifier_tx: Arc<tokio::sync::watch::Sender<HummockEpoch>>,
 
     seal_epoch: Arc<AtomicU64>,
@@ -218,6 +220,7 @@ impl HummockStorage {
                 .get_memory_limiter()
                 .clone(),
         )
+        .await
         .expect("storage_core mut be init");
 
         let instance = Self {

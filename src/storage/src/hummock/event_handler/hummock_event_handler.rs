@@ -21,6 +21,7 @@ use futures::future::{select, try_join_all, Either};
 use futures::FutureExt;
 use itertools::Itertools;
 use parking_lot::RwLock;
+use risingwave_common::catalog::TableId;
 use risingwave_common::config::StorageConfig;
 use risingwave_hummock_sdk::compaction_group::hummock_version_ext::HummockVersionExt;
 use risingwave_hummock_sdk::HummockEpoch;
@@ -79,6 +80,10 @@ impl BufferTracker {
     }
 }
 
+type InstanceId = u64;
+type ReadVersionMappingType =
+    RwLock<HashMap<TableId, HashMap<InstanceId, Arc<RwLock<HummockReadVersion>>>>>;
+
 pub struct HummockEventHandler {
     buffer_tracker: BufferTracker,
     sstable_id_manager: SstableIdManagerRef,
@@ -87,7 +92,8 @@ pub struct HummockEventHandler {
     pending_sync_requests: HashMap<HummockEpoch, oneshot::Sender<HummockResult<SyncResult>>>,
 
     // TODO: replace it with hashmap<id, read_version>
-    read_version: Arc<RwLock<HummockReadVersion>>,
+    // read_version: Arc<RwLock<HummockReadVersion>>,
+    read_version_mapping: ReadVersionMappingType,
 
     version_update_notifier_tx: Arc<tokio::sync::watch::Sender<HummockEpoch>>,
     seal_epoch: Arc<AtomicU64>,
@@ -117,7 +123,8 @@ impl HummockEventHandler {
             hummock_event_rx,
             upload_handle_manager: UploadHandleManager::new(),
             pending_sync_requests: Default::default(),
-            read_version,
+            // read_version,
+            read_version_mapping: RwLock::new(HashMap::default()),
             version_update_notifier_tx,
             seal_epoch,
             pinned_version,
@@ -135,7 +142,7 @@ impl HummockEventHandler {
     }
 
     pub fn read_version(&self) -> Arc<RwLock<HummockReadVersion>> {
-        self.read_version.clone()
+        // self.read_version.clone()
     }
 
     pub fn buffer_tracker(&self) -> &BufferTracker {
@@ -346,11 +353,21 @@ impl HummockEventHandler {
 
         self.pinned_version = self.pinned_version.new_pin_version(newly_pinned_version);
 
-        self.read_version
-            .write()
-            .update(VersionUpdate::CommittedSnapshot(
-                self.pinned_version.clone(),
-            ));
+        {
+            let read_version_mapping_guard = self.read_version_mapping.read();
+
+            // todo: do some prune for version update
+            read_version_mapping_guard
+                .values()
+                .flat_map(HashMap::values)
+                .for_each(|read_version| {
+                    read_version
+                        .write()
+                        .update(VersionUpdate::CommittedSnapshot(
+                            self.pinned_version.clone(),
+                        ))
+                });
+        }
 
         let max_committed_epoch = self.pinned_version.max_committed_epoch();
 
@@ -439,6 +456,40 @@ impl HummockEventHandler {
                             .seal_epoch(epoch, is_checkpoint);
 
                         self.seal_epoch.store(epoch, Ordering::SeqCst);
+                    }
+
+                    HummockEvent::RegisterHummockInstance {
+                        table_id,
+                        instance_id,
+                        read_version,
+                        sync_result_sender,
+                    } => {
+                        let mut read_version_mapping_guard = self.read_version_mapping.write();
+
+                        read_version_mapping_guard
+                            .entry(table_id)
+                            .or_default()
+                            .insert(instance_id, read_version);
+
+                        sync_result_sender
+                            .send(())
+                            .expect("RegisterHummockInstance send fail");
+                    }
+
+                    HummockEvent::DestroyHummockInstance {
+                        table_id,
+                        instance_id,
+                    } => {
+                        let mut read_version_mapping_guard = self.read_version_mapping.write();
+                        read_version_mapping_guard
+                            .get_mut(&table_id)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "DestroyHummockInstance table_id {} instance_id {} fail",
+                                    table_id, instance_id
+                                )
+                            })
+                            .remove(&instance_id);
                     }
                 },
                 Either::Right(None) => {

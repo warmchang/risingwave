@@ -168,6 +168,7 @@ async fn test_storage_basic() {
         read_version,
         event_tx,
     )
+    .await
     .unwrap();
 
     // First batch inserts the anchor and others.
@@ -515,22 +516,8 @@ async fn test_state_store_sync() {
         hummock_meta_client.clone(),
         read_version,
         event_tx.clone(),
-    )
-    .unwrap();
+    );
 
-    // ingest 26B batch
-    let mut batch1 = vec![
-        (
-            prefixed_key(Bytes::from("aaaa")),
-            StorageValue::new_put("1111"),
-        ),
-        (
-            prefixed_key(Bytes::from("bbbb")),
-            StorageValue::new_put("2222"),
-        ),
-    ];
-
-    // Make sure the batch is sorted.
     batch1.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
     hummock_storage
         .ingest_batch(
@@ -768,6 +755,7 @@ async fn test_delete_get() {
         read_version,
         event_tx.clone(),
     )
+    .await
     .unwrap();
 
     let epoch1 = initial_epoch + 1;
@@ -866,6 +854,7 @@ async fn test_multiple_epoch_sync() {
         read_version,
         event_tx.clone(),
     )
+    .await
     .unwrap();
 
     let epoch1 = initial_epoch + 1;
@@ -1032,6 +1021,7 @@ async fn test_iter_with_min_epoch() {
         read_version,
         event_tx.clone(),
     )
+    .await
     .unwrap();
 
     let epoch1 = (31 * 1000) << 16;
