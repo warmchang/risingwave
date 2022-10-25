@@ -407,30 +407,32 @@ where
                 }
                 table_fragments::State::Created => {}
             }
+
             if chain_fragment_ids.contains(fragment_id) {
                 bail!("rescheduling Chain is not supported");
             }
 
             if mv_fragment_ids.contains(fragment_id) {
-                let mut downstream_fragments = downstream_fragment_id_map
+                let mut queue: VecDeque<_> = downstream_fragment_id_map
                     .get(fragment_id)
                     .unwrap()
                     .iter()
                     .cloned()
-                    .collect_vec();
-                while let Some(downstream_id) = downstream_fragments.pop() {
-                    if !chain_fragment_ids.contains(&downstream_id) {
+                    .collect();
+
+                while let Some(downstream_id) = queue.pop_front() {
+                    if !chain_fragment_ids.contains(&downstream_id)
+                        && !mv_fragment_ids.contains(&downstream_id)
+                    {
                         continue;
                     }
-                    if !mv_fragment_ids.contains(&downstream_id) {
-                        continue;
+
+                    if let Some(downstream_fragment_ids) =
+                        downstream_fragment_id_map.get(&downstream_id)
+                    {
+                        queue.extend(downstream_fragment_ids);
                     }
-                    downstream_fragments.extend(
-                        downstream_fragment_id_map
-                            .get(&downstream_id)
-                            .unwrap()
-                            .iter(),
-                    );
+
                     chain_reschedule.insert(
                         downstream_id,
                         ParallelUnitReschedule {
@@ -492,6 +494,13 @@ where
                     );
                 }
             }
+        }
+
+        if !chain_reschedule.is_empty() {
+            tracing::info!(
+                "reschedule plan rewritten with chain reschedule {:?}",
+                chain_reschedule
+            );
         }
 
         reschedule.extend(chain_reschedule.into_iter());
