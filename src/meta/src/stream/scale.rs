@@ -422,6 +422,9 @@ where
                     if !chain_fragment_ids.contains(&downstream_id) {
                         continue;
                     }
+                    if !mv_fragment_ids.contains(&downstream_id) {
+                        continue;
+                    }
                     downstream_fragments.extend(
                         downstream_fragment_id_map
                             .get(&downstream_id)
