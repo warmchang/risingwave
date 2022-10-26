@@ -14,12 +14,11 @@
 
 //! Hummock is the state store of the streaming system.
 
-use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use parking_lot::RwLock;
+use risingwave_common::catalog::TableId;
 use risingwave_common::config::StorageConfig;
 use risingwave_hummock_sdk::{HummockEpoch, *};
 #[cfg(any(test, feature = "test"))]
@@ -140,6 +139,8 @@ pub struct HummockStorage {
 
     seal_epoch: Arc<AtomicU64>,
 
+    // TODO: serving batch_query with read_version_mapping
+    #[allow(dead_code)]
     read_version_mapping: Arc<ReadVersionMappingType>,
 }
 
@@ -203,29 +204,20 @@ impl HummockStorage {
             event_tx.clone(),
         );
 
-        let read_version_mapping = Arc::new(RwLock::new(HashMap::default()));
         let hummock_event_handler = HummockEventHandler::new(
             local_version_manager.clone(),
             event_rx,
             pinned_version,
             compactor_context,
-            read_version_mapping.clone(),
         );
+        let version_update_notifier_tx = hummock_event_handler.version_update_notifier_tx();
+        let seal_epoch = hummock_event_handler.sealed_epoch();
+        let read_version_mapping = hummock_event_handler.read_version_mapping();
 
-        let storage_core = HummockStorageV2::new(
-            options.clone(),
-            sstable_store.clone(),
-            hummock_meta_client.clone(),
-            stats.clone(),
-            read_version,
-            event_tx.clone(),
-            hummock_event_handler
-                .buffer_tracker()
-                .get_memory_limiter()
-                .clone(),
-        )
-        .await
-        .expect("storage_core mut be init");
+        tokio::spawn(hummock_event_handler.start_hummock_event_handler_worker());
+
+        // TODO: remove storage_core for writing when executor support local_state_store
+        let storage_core = Self::new_local(TableId::default(), 0, event_tx.clone()).await;
 
         let instance = Self {
             options,
@@ -239,15 +231,32 @@ impl HummockStorage {
                 shutdown_sender: event_tx.clone(),
             }),
             storage_core,
-            version_update_notifier_tx: hummock_event_handler.version_update_notifier_tx(),
-            seal_epoch: hummock_event_handler.sealed_epoch(),
+            version_update_notifier_tx,
+            seal_epoch,
             hummock_event_sender: event_tx,
             read_version_mapping,
         };
 
-        tokio::spawn(hummock_event_handler.start_hummock_event_handler_worker());
-
         Ok(instance)
+    }
+
+    // TODO: make it self function and remove hummock_event_sender parameter
+    async fn new_local(
+        table_id: TableId,
+        id: u64,
+        hummock_event_sender: UnboundedSender<HummockEvent>,
+    ) -> HummockStorageV2 {
+        let (tx, rx) = tokio::sync::oneshot::channel::<HummockStorageV2>();
+        hummock_event_sender
+            .send(HummockEvent::RegisterHummockInstance {
+                table_id,
+                instance_id: id,
+                event_tx_for_instance: hummock_event_sender.clone(),
+                sync_result_sender: tx,
+            })
+            .unwrap();
+
+        rx.await.unwrap()
     }
 
     pub fn hummock_meta_client(&self) -> &Arc<dyn HummockMetaClient> {

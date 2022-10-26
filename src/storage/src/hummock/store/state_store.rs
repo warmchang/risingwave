@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::cmp::Ordering;
+use std::fmt::Debug;
 use std::future::Future;
 use std::iter::once;
 use std::ops::Bound::{Excluded, Included};
@@ -24,13 +25,12 @@ use itertools::Itertools;
 use minitrace::future::FutureExt;
 use minitrace::Span;
 use parking_lot::RwLock;
-use risingwave_common::catalog::TableId;
 use risingwave_common::config::StorageConfig;
 use risingwave_hummock_sdk::can_concat;
 use risingwave_hummock_sdk::key::{key_with_epoch, user_key};
 use risingwave_pb::hummock::LevelType;
 use risingwave_rpc_client::HummockMetaClient;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 use super::memtable::ImmutableMemtable;
 use super::version::{HummockReadVersion, StagingData, VersionUpdate};
@@ -93,7 +93,7 @@ pub struct HummockStorage {
 
 impl HummockStorageCore {
     #[cfg(any(test, feature = "test"))]
-    pub async fn for_test(
+    pub fn for_test(
         options: Arc<StorageConfig>,
         sstable_store: SstableStoreRef,
         hummock_meta_client: Arc<dyn HummockMetaClient>,
@@ -109,11 +109,10 @@ impl HummockStorageCore {
             event_sender,
             MemoryLimiter::unlimit(),
         )
-        .await
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn new(
+    pub fn new(
         options: Arc<StorageConfig>,
         sstable_store: SstableStoreRef,
         hummock_meta_client: Arc<dyn HummockMetaClient>,
@@ -130,28 +129,16 @@ impl HummockStorageCore {
 
         let instance = Self {
             options,
-            read_version: read_version.clone(),
+            read_version,
             hummock_meta_client,
             sstable_store,
             stats,
             sstable_id_manager,
             #[cfg(not(madsim))]
             tracing: Arc::new(risingwave_tracing::RwTracingService::new()),
-            event_sender: event_sender.clone(),
+            event_sender,
             memory_limiter,
         };
-
-        let (tx, rx) = oneshot::channel();
-        event_sender
-            .send(HummockEvent::RegisterHummockInstance {
-                table_id: TableId::default(),
-                instance_id: 0,
-                read_version,
-                sync_result_sender: tx,
-            })
-            .unwrap();
-
-        rx.await.unwrap();
 
         Ok(instance)
     }
@@ -548,7 +535,7 @@ impl StateStore for HummockStorage {
 
 impl HummockStorage {
     #[cfg(any(test, feature = "test"))]
-    pub async fn for_test(
+    pub fn for_test(
         options: Arc<StorageConfig>,
         sstable_store: SstableStoreRef,
         hummock_meta_client: Arc<dyn HummockMetaClient>,
@@ -561,8 +548,7 @@ impl HummockStorage {
             hummock_meta_client,
             read_version,
             event_sender,
-        )
-        .await?;
+        )?;
 
         let instance = Self {
             core: Arc::new(storage_core),
@@ -571,7 +557,7 @@ impl HummockStorage {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn new(
+    pub fn new(
         options: Arc<StorageConfig>,
         sstable_store: SstableStoreRef,
         hummock_meta_client: Arc<dyn HummockMetaClient>,
@@ -586,11 +572,10 @@ impl HummockStorage {
             sstable_store,
             hummock_meta_client,
             stats,
-            read_version.clone(),
-            event_sender.clone(),
+            read_version,
+            event_sender,
             memory_limiter,
-        )
-        .await?;
+        )?;
 
         let instance = Self {
             core: Arc::new(storage_core),
@@ -672,5 +657,11 @@ impl Drop for HummockStorageIterator {
         let mut stats = StoreLocalStatistic::default();
         self.collect_local_statistic(&mut stats);
         stats.report(&self.metrics);
+    }
+}
+
+impl Debug for HummockStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HummockStorage").finish()
     }
 }
