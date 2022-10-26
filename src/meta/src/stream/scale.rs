@@ -451,11 +451,6 @@ where
                         stream_source_fragment_ids.insert(*fragment_id);
                     }
                 }
-                FragmentType::Sink => {
-                    if downstream_fragment_id_map.get(fragment_id).is_some() {
-                        bail!("rescheduling Materialize with downstream is not supported")
-                    }
-                }
                 _ => {}
             }
 
