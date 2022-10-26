@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::ops::Bound::{Included, Unbounded};
 use std::sync::Arc;
 use std::time::Duration;
@@ -74,11 +75,12 @@ pub async fn prepare_hummock_event_handler(
 
     let buffer_tracker = BufferTracker::from_storage_config(&opt);
 
+    let read_version_mapping = Arc::new(RwLock::new(HashMap::default()));
     let local_version_manager = LocalVersionManager::new(
         pinned_version.clone(),
         compactor_context.clone(),
         buffer_tracker,
-        event_tx.clone(),
+        eevent_tx.clone(),
     );
 
     let hummock_event_handler = HummockEventHandler::new(
@@ -86,6 +88,7 @@ pub async fn prepare_hummock_event_handler(
         event_rx,
         pinned_version,
         compactor_context,
+        read_version_mapping,
     );
 
     (hummock_event_handler, event_tx)
@@ -96,7 +99,7 @@ async fn try_wait_epoch_for_test(
     version_update_notifier_tx: Arc<tokio::sync::watch::Sender<HummockEpoch>>,
 ) {
     let mut receiver = version_update_notifier_tx.subscribe();
-    let max_committed_epoch = *receiver.borrow();
+    let max_committed_epoch = *receiver.borrow_and_update();
     if max_committed_epoch >= wait_epoch {
         return;
     }

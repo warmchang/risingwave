@@ -81,7 +81,7 @@ impl BufferTracker {
 }
 
 type InstanceId = u64;
-type ReadVersionMappingType =
+pub type ReadVersionMappingType =
     RwLock<HashMap<TableId, HashMap<InstanceId, Arc<RwLock<HummockReadVersion>>>>>;
 
 pub struct HummockEventHandler {
@@ -90,16 +90,11 @@ pub struct HummockEventHandler {
     hummock_event_rx: mpsc::UnboundedReceiver<HummockEvent>,
     upload_handle_manager: UploadHandleManager,
     pending_sync_requests: HashMap<HummockEpoch, oneshot::Sender<HummockResult<SyncResult>>>,
-
-    // TODO: replace it with hashmap<id, read_version>
-    // read_version: Arc<RwLock<HummockReadVersion>>,
-    read_version_mapping: ReadVersionMappingType,
-
+    read_version_mapping: Arc<ReadVersionMappingType>,
     version_update_notifier_tx: Arc<tokio::sync::watch::Sender<HummockEpoch>>,
     seal_epoch: Arc<AtomicU64>,
     pinned_version: PinnedVersion,
     write_conflict_detector: Option<Arc<ConflictDetector>>,
-
     local_version_manager: Arc<LocalVersionManager>,
 }
 
@@ -109,8 +104,10 @@ impl HummockEventHandler {
         hummock_event_rx: mpsc::UnboundedReceiver<HummockEvent>,
         pinned_version: PinnedVersion,
         compactor_context: Arc<Context>,
+        read_version_mapping: Arc<ReadVersionMappingType>,
     ) -> Self {
-        let read_version = Arc::new(RwLock::new(HummockReadVersion::new(pinned_version.clone())));
+        // let read_version =
+        // Arc::new(RwLock::new(HummockReadVersion::new(pinned_version.clone())));
         let seal_epoch = Arc::new(AtomicU64::new(pinned_version.max_committed_epoch()));
         let (version_update_notifier_tx, _) =
             tokio::sync::watch::channel(pinned_version.max_committed_epoch());
@@ -123,13 +120,12 @@ impl HummockEventHandler {
             hummock_event_rx,
             upload_handle_manager: UploadHandleManager::new(),
             pending_sync_requests: Default::default(),
-            // read_version,
-            read_version_mapping: RwLock::new(HashMap::default()),
             version_update_notifier_tx,
             seal_epoch,
             pinned_version,
             write_conflict_detector,
             local_version_manager,
+            read_version_mapping,
         }
     }
 
@@ -141,8 +137,8 @@ impl HummockEventHandler {
         self.version_update_notifier_tx.clone()
     }
 
-    pub fn read_version(&self) -> Arc<RwLock<HummockReadVersion>> {
-        // self.read_version.clone()
+    pub fn read_version_mapping(&self) -> Arc<ReadVersionMappingType> {
+        self.read_version_mapping.clone()
     }
 
     pub fn buffer_tracker(&self) -> &BufferTracker {
@@ -424,6 +420,7 @@ impl HummockEventHandler {
                         // buffer.
                         self.try_flush_shared_buffer();
                     }
+
                     HummockEvent::SyncEpoch {
                         new_sync_epoch,
                         sync_result_sender,

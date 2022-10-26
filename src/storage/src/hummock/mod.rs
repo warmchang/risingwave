@@ -14,10 +14,12 @@
 
 //! Hummock is the state store of the streaming system.
 
+use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use parking_lot::RwLock;
 use risingwave_common::config::StorageConfig;
 use risingwave_hummock_sdk::{HummockEpoch, *};
 #[cfg(any(test, feature = "test"))]
@@ -83,7 +85,7 @@ pub use self::sstable_store::*;
 use super::monitor::StateStoreMetrics;
 use crate::error::StorageResult;
 use crate::hummock::compactor::Context;
-use crate::hummock::event_handler::hummock_event_handler::BufferTracker;
+use crate::hummock::event_handler::hummock_event_handler::{BufferTracker, ReadVersionMappingType};
 use crate::hummock::event_handler::{HummockEvent, HummockEventHandler};
 use crate::hummock::local_version::pinned_version::{start_pinned_version_worker, PinnedVersion};
 use crate::hummock::observer_manager::HummockObserverNode;
@@ -137,6 +139,8 @@ pub struct HummockStorage {
     version_update_notifier_tx: Arc<tokio::sync::watch::Sender<HummockEpoch>>,
 
     seal_epoch: Arc<AtomicU64>,
+
+    read_version_mapping: Arc<ReadVersionMappingType>,
 }
 
 impl HummockStorage {
@@ -199,14 +203,14 @@ impl HummockStorage {
             event_tx.clone(),
         );
 
+        let read_version_mapping = Arc::new(RwLock::new(HashMap::default()));
         let hummock_event_handler = HummockEventHandler::new(
             local_version_manager.clone(),
             event_rx,
             pinned_version,
             compactor_context,
+            read_version_mapping.clone(),
         );
-
-        let read_version = hummock_event_handler.read_version();
 
         let storage_core = HummockStorageV2::new(
             options.clone(),
@@ -238,6 +242,7 @@ impl HummockStorage {
             version_update_notifier_tx: hummock_event_handler.version_update_notifier_tx(),
             seal_epoch: hummock_event_handler.sealed_epoch(),
             hummock_event_sender: event_tx,
+            read_version_mapping,
         };
 
         tokio::spawn(hummock_event_handler.start_hummock_event_handler_worker());
