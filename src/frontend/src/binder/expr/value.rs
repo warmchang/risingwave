@@ -110,6 +110,25 @@ impl Binder {
         Ok(expr)
     }
 
+    pub(super) fn bind_array_cast(&mut self, exprs: Vec<Expr>, ty: DataType) -> Result<ExprImpl> {
+        if exprs.is_empty() {
+            return Ok(FunctionCall::new_unchecked(ExprType::Array, vec![], ty).into());
+        }
+        let inner_type = if let DataType::List { datatype } = &ty {
+            *datatype.clone()
+        } else {
+            unreachable!()
+        };
+
+        let exprs = exprs
+            .into_iter()
+            .map(|e| self.bind_cast_inner(e, inner_type.clone()))
+            .collect::<Result<Vec<ExprImpl>>>()?;
+
+        let expr: ExprImpl = FunctionCall::new_unchecked(ExprType::Array, exprs, ty).into();
+        Ok(expr)
+    }
+
     pub(super) fn bind_array_index(&mut self, obj: Expr, index: Expr) -> Result<ExprImpl> {
         let obj = self.bind_expr(obj)?;
         match obj.return_type() {
