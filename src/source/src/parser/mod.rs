@@ -17,11 +17,11 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 pub use avro_parser::*;
+pub use canal::*;
 pub use debezium::*;
 use itertools::Itertools;
 pub use json_parser::*;
 pub use pb_parser::*;
-pub use canal::*;
 use risingwave_common::array::{ArrayBuilderImpl, Op, StreamChunk};
 use risingwave_common::error::ErrorCode::ProtocolError;
 use risingwave_common::error::{Result, RwError};
@@ -31,12 +31,12 @@ use crate::parser::maxwell::MaxwellParser;
 use crate::{SourceColumnDesc, SourceFormat};
 
 mod avro_parser;
+mod canal;
 mod common;
 mod debezium;
 mod json_parser;
 mod maxwell;
 mod pb_parser;
-mod canal;
 
 /// A builder for building a [`StreamChunk`] from [`SourceColumnDesc`].
 pub struct SourceStreamChunkBuilder {

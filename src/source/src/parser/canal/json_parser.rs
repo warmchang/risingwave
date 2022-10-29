@@ -20,10 +20,9 @@ use risingwave_common::error::{Result, RwError};
 use serde_derive::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::parser::canal::operators::*;
 use crate::parser::common::json_parse_value;
 use crate::SourceParser;
-
-use crate::parser::canal::operators::*;
 
 #[derive(Debug)]
 pub struct CanalJsonParser;
@@ -173,7 +172,8 @@ mod test {
     }
     #[test]
     fn test_parse_event() {
-        let event: CanalJsonEvent = serde_json::from_slice(get_update_payload().as_bytes()).unwrap();
+        let event: CanalJsonEvent =
+            serde_json::from_slice(get_update_payload().as_bytes()).unwrap();
         println!("{:?}", event);
     }
 }
