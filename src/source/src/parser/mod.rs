@@ -21,6 +21,7 @@ pub use debezium::*;
 use itertools::Itertools;
 pub use json_parser::*;
 pub use pb_parser::*;
+pub use canal::*;
 use risingwave_common::array::{ArrayBuilderImpl, Op, StreamChunk};
 use risingwave_common::error::ErrorCode::ProtocolError;
 use risingwave_common::error::{Result, RwError};
@@ -35,6 +36,7 @@ mod debezium;
 mod json_parser;
 mod maxwell;
 mod pb_parser;
+mod canal;
 
 /// A builder for building a [`StreamChunk`] from [`SourceColumnDesc`].
 pub struct SourceStreamChunkBuilder {
