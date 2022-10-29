@@ -12,4 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub const CANAL_UPDATE_OP: &str = "op";
+pub const TICDC_UPDATE_EVENT: &str = "UPDATE";
+pub const TICDC_INSERT_EVENT: &str = "INSERT";
+pub const TICDC_DELETE_EVENT: &str = "DELETE";
+pub const TICDC_QUERY_EVENT: &str = "QUERY";
