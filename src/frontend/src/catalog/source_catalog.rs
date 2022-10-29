@@ -16,6 +16,7 @@ use std::collections::HashMap;
 
 use risingwave_pb::catalog::source::Info;
 use risingwave_pb::catalog::{Source as ProstSource, StreamSourceInfo, TableSourceInfo};
+use risingwave_pb::stream_plan::source_node::Info as StreamPlanInfo;
 
 use super::column_catalog::ColumnCatalog;
 use super::{ColumnId, SourceId};
@@ -27,6 +28,16 @@ pub const KAFKA_CONNECTOR: &str = "kafka";
 pub enum SourceCatalogInfo {
     StreamSource(StreamSourceInfo),
     TableSource(TableSourceInfo),
+}
+
+impl SourceCatalogInfo {
+    // TODO[ice]: merge?
+    pub fn to_stream_plan(self) -> StreamPlanInfo {
+        match self {
+            SourceCatalogInfo::StreamSource(info) => StreamPlanInfo::StreamSource(info),
+            SourceCatalogInfo::TableSource(info) => StreamPlanInfo::TableSource(info),
+        }
+    }
 }
 
 /// this struct `SourceCatalog` is used in frontend and compared with `ProstSource` it only maintain
