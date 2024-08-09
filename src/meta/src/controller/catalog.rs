@@ -643,7 +643,6 @@ impl CatalogController {
     }
 
     /// `clean_dirty_creating_jobs` cleans up creating jobs that are creating in Foreground mode or in Initial status.
-    /// FIXME(kwannoel): Notify deleted objects to the frontend.
     pub async fn clean_dirty_creating_jobs(&self) -> MetaResult<ReleaseContext> {
         let inner = self.inner.write().await;
         let txn = inner.db.begin().await?;
@@ -682,6 +681,25 @@ impl CatalogController {
         self.log_cleaned_dirty_jobs(&dirty_objs, &txn).await?;
 
         let dirty_job_ids = dirty_objs.iter().map(|obj| obj.oid).collect::<Vec<_>>();
+
+        // Filter out dummy objs for replacement.
+        // todo: we'd better introduce a new dummy object type for replacement.
+        let all_dirty_table_ids = dirty_objs
+            .iter()
+            .filter(|obj| obj.obj_type == ObjectType::Table)
+            .map(|obj| obj.oid)
+            .collect_vec();
+        let dirty_table_ids: HashSet<ObjectId> = Table::find()
+            .select_only()
+            .column(table::Column::TableId)
+            .filter(table::Column::TableId.is_in(all_dirty_table_ids))
+            .into_tuple::<ObjectId>()
+            .all(&txn)
+            .await?
+            .into_iter()
+            .collect();
+        dirty_objs
+            .retain(|obj| obj.obj_type != ObjectType::Table || dirty_table_ids.contains(&obj.oid));
 
         let associated_source_ids: Vec<SourceId> = Table::find()
             .select_only()
@@ -2656,6 +2674,19 @@ impl CatalogController {
             .collect())
     }
 
+    pub async fn get_sink_by_ids(&self, sink_ids: Vec<SinkId>) -> MetaResult<Vec<PbSink>> {
+        let inner = self.inner.read().await;
+        let sink_objs = Sink::find()
+            .find_also_related(Object)
+            .filter(sink::Column::SinkId.is_in(sink_ids))
+            .all(&inner.db)
+            .await?;
+        Ok(sink_objs
+            .into_iter()
+            .map(|(sink, obj)| ObjectModel(sink, obj.unwrap()).into())
+            .collect())
+    }
+
     pub async fn get_subscription_by_id(
         &self,
         subscription_id: SubscriptionId,
@@ -2670,7 +2701,7 @@ impl CatalogController {
             .into_iter()
             .map(|(subscription, obj)| ObjectModel(subscription, obj.unwrap()).into())
             .find_or_first(|_| true)
-            .ok_or_else(|| anyhow!("cant find subscription with id {}", subscription_id))?;
+            .ok_or_else(|| anyhow!("cannot find subscription with id {}", subscription_id))?;
 
         Ok(subscription)
     }

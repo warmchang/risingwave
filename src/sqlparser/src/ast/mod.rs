@@ -46,9 +46,9 @@ pub use self::legacy_source::{
 };
 pub use self::operator::{BinaryOperator, QualifiedOperator, UnaryOperator};
 pub use self::query::{
-    Cte, CteInner, Distinct, Fetch, Join, JoinConstraint, JoinOperator, LateralView, OrderByExpr,
-    Query, Select, SelectItem, SetExpr, SetOperator, TableAlias, TableFactor, TableWithJoins, Top,
-    Values, With,
+    Corresponding, Cte, CteInner, Distinct, Fetch, Join, JoinConstraint, JoinOperator, LateralView,
+    OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator, TableAlias, TableFactor,
+    TableWithJoins, Top, Values, With,
 };
 pub use self::statement::*;
 pub use self::value::{
@@ -2482,7 +2482,7 @@ impl fmt::Display for FunctionArg {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Function {
     /// Whether the function is prefixed with `aggregate:`
-    pub aggregate: bool,
+    pub scalar_as_agg: bool,
     pub name: ObjectName,
     pub args: Vec<FunctionArg>,
     /// whether the last argument is variadic, e.g. `foo(a, b, variadic c)`
@@ -2499,7 +2499,7 @@ pub struct Function {
 impl Function {
     pub fn no_arg(name: ObjectName) -> Self {
         Self {
-            aggregate: false,
+            scalar_as_agg: false,
             name,
             args: vec![],
             variadic: false,
@@ -2514,7 +2514,7 @@ impl Function {
 
 impl fmt::Display for Function {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.aggregate {
+        if self.scalar_as_agg {
             write!(f, "aggregate:")?;
         }
         write!(

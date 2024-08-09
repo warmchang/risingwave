@@ -282,8 +282,6 @@ async fn test_hummock_table() {
         Ordering::Equal,
         levels
             .l0
-            .as_ref()
-            .unwrap()
             .sub_levels
             .iter()
             .chain(levels.levels.iter())
@@ -540,7 +538,7 @@ async fn test_hummock_manager_basic() {
     );
     for _ in 0..2 {
         hummock_manager
-            .unpin_version_before(context_id_1, u64::MAX)
+            .unpin_version_before(context_id_1, HummockVersionId::MAX)
             .await
             .unwrap();
         assert_eq!(
@@ -573,8 +571,8 @@ async fn test_hummock_manager_basic() {
         );
         // pinned by context_id_1
         assert_eq!(
-            hummock_manager.get_min_pinned_version_id().await,
-            init_version_id + commit_log_count + register_log_count - 2,
+            hummock_manager.get_min_pinned_version_id().await + 2,
+            init_version_id + commit_log_count + register_log_count,
         );
     }
     // objects_to_delete is always empty because no compaction is ever invoked.
@@ -599,7 +597,7 @@ async fn test_hummock_manager_basic() {
         ((commit_log_count + register_log_count) as usize, 0)
     );
     hummock_manager
-        .unpin_version_before(context_id_1, u64::MAX)
+        .unpin_version_before(context_id_1, HummockVersionId::MAX)
         .await
         .unwrap();
     assert_eq!(
@@ -607,7 +605,7 @@ async fn test_hummock_manager_basic() {
         init_version_id + commit_log_count + register_log_count
     );
     hummock_manager
-        .unpin_version_before(context_id_2, u64::MAX)
+        .unpin_version_before(context_id_2, HummockVersionId::MAX)
         .await
         .unwrap();
     assert_eq!(
@@ -1809,8 +1807,6 @@ async fn test_split_compaction_group_on_demand_bottom_levels() {
     assert!(current_version
         .get_compaction_group_levels(2)
         .l0
-        .as_ref()
-        .unwrap()
         .sub_levels
         .is_empty());
     assert_eq!(
@@ -2226,7 +2222,7 @@ async fn test_partition_level() {
     }
     let current_version = hummock_manager.get_current_version().await;
     let group = current_version.get_compaction_group_levels(new_group_id);
-    for sub_level in &group.l0.as_ref().unwrap().sub_levels {
+    for sub_level in &group.l0.sub_levels {
         if sub_level.total_file_size > config.sub_level_max_compaction_bytes {
             assert!(sub_level.vnode_partition_count > 0);
         }

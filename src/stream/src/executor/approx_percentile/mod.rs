@@ -12,8 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod state_cache;
-mod top_n_cache;
-
-pub use state_cache::*;
-pub use top_n_cache::*;
+pub mod global;
+pub mod local;

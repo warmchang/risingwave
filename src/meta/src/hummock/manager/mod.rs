@@ -61,13 +61,15 @@ pub(crate) mod checkpoint;
 mod commit_epoch;
 mod compaction;
 pub mod sequence;
-mod time_travel;
+pub mod time_travel;
 mod timer_task;
 mod transaction;
 mod utils;
 mod worker;
 
 pub(crate) use commit_epoch::*;
+#[cfg(any(test, feature = "test"))]
+pub use commit_epoch::{BatchCommitForNewCg, CommitEpochInfo};
 use compaction::*;
 pub use compaction::{check_cg_write_limit, WriteLimitType};
 pub(crate) use utils::*;
@@ -378,7 +380,7 @@ impl HummockManager {
                         .into_iter()
                         .map(|m| {
                             (
-                                m.id as HummockVersionId,
+                                HummockVersionId::new(m.id as _),
                                 HummockVersionDelta::from_persisted_protobuf(
                                     &PbHummockVersionDelta::from(m),
                                 ),
@@ -471,7 +473,7 @@ impl HummockManager {
 
         self.delete_object_tracker.clear();
         // Not delete stale objects when archive or time travel is enabled
-        if !self.env.opts.enable_hummock_data_archive && !self.env.opts.enable_hummock_time_travel {
+        if !self.env.opts.enable_hummock_data_archive && !self.time_travel_enabled().await {
             versioning_guard.mark_objects_for_deletion(context_info, &self.delete_object_tracker);
         }
 
