@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use risingwave_common::hash::VnodeCount;
@@ -25,15 +26,15 @@ use risingwave_meta_model_migration::{MigrationStatus, Migrator, MigratorTrait};
 use risingwave_pb::catalog::connection::PbInfo as PbConnectionInfo;
 use risingwave_pb::catalog::source::PbOptionalAssociatedTableId;
 use risingwave_pb::catalog::subscription::PbSubscriptionState;
-use risingwave_pb::catalog::table::{PbOptionalAssociatedSourceId, PbTableType};
+use risingwave_pb::catalog::table::{PbEngine, PbOptionalAssociatedSourceId, PbTableType};
 use risingwave_pb::catalog::{
     PbConnection, PbCreateType, PbDatabase, PbFunction, PbHandleConflictBehavior, PbIndex,
     PbSchema, PbSecret, PbSink, PbSinkType, PbSource, PbStreamJobStatus, PbSubscription, PbTable,
     PbView,
 };
-use sea_orm::{DatabaseConnection, ModelTrait};
+use sea_orm::{DatabaseConnection, DbBackend, ModelTrait};
 
-use crate::{MetaError, MetaResult};
+use crate::{MetaError, MetaResult, MetaStoreBackend};
 
 pub mod catalog;
 pub mod cluster;
@@ -66,18 +67,43 @@ pub struct SqlMetaStore {
 pub const IN_MEMORY_STORE: &str = "sqlite::memory:";
 
 impl SqlMetaStore {
-    pub fn new(conn: DatabaseConnection, endpoint: String) -> Self {
-        Self { conn, endpoint }
+    /// Connect to the SQL meta store based on the given configuration.
+    pub async fn connect(backend: MetaStoreBackend) -> Result<Self, sea_orm::DbErr> {
+        Ok(match backend {
+            MetaStoreBackend::Mem => {
+                let conn = sea_orm::Database::connect(IN_MEMORY_STORE).await?;
+                Self {
+                    conn,
+                    endpoint: IN_MEMORY_STORE.to_owned(),
+                }
+            }
+            MetaStoreBackend::Sql { endpoint, config } => {
+                let is_sqlite = DbBackend::Sqlite.is_prefix_of(&endpoint);
+                let mut options = sea_orm::ConnectOptions::new(endpoint.clone());
+                options
+                    .max_connections(config.max_connections)
+                    .min_connections(config.min_connections)
+                    .connect_timeout(Duration::from_secs(config.connection_timeout_sec))
+                    .idle_timeout(Duration::from_secs(config.idle_timeout_sec))
+                    .acquire_timeout(Duration::from_secs(config.acquire_timeout_sec));
+
+                if is_sqlite {
+                    // Since Sqlite is prone to the error "(code: 5) database is locked" under concurrent access,
+                    // here we forcibly specify the number of connections as 1.
+                    options.max_connections(1);
+                }
+
+                let conn = sea_orm::Database::connect(options).await?;
+                Self { conn, endpoint }
+            }
+        })
     }
 
     #[cfg(any(test, feature = "test"))]
     pub async fn for_test() -> Self {
-        let conn = sea_orm::Database::connect(IN_MEMORY_STORE).await.unwrap();
-        Migrator::up(&conn, None).await.unwrap();
-        Self {
-            conn,
-            endpoint: IN_MEMORY_STORE.to_string(),
-        }
+        let this = Self::connect(MetaStoreBackend::Mem).await.unwrap();
+        Migrator::up(&this.conn, None).await.unwrap();
+        this
     }
 
     /// Check whether the cluster, which uses SQL as the backend, is a new cluster.
@@ -204,6 +230,7 @@ impl From<ObjectModel<table::Model>> for PbTable {
             maybe_vnode_count: VnodeCount::set(value.0.vnode_count).to_protobuf(),
             webhook_info: value.0.webhook_info.map(|info| info.to_protobuf()),
             job_id: value.0.belongs_to_job_id.map(|id| id as _),
+            engine: value.0.engine.map(|engine| PbEngine::from(engine) as i32),
         }
     }
 }

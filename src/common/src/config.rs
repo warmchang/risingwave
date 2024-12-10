@@ -528,6 +528,10 @@ pub struct MetaDeveloperConfig {
     #[serde(default = "default::developer::hummock_time_travel_sst_info_fetch_batch_size")]
     /// Max number of SSTs fetched from meta store per SELECT, during time travel Hummock version replay.
     pub hummock_time_travel_sst_info_fetch_batch_size: usize,
+
+    #[serde(default = "default::developer::hummock_time_travel_sst_info_insert_batch_size")]
+    /// Max number of SSTs inserted into meta store per INSERT, during time travel metadata writing.
+    pub hummock_time_travel_sst_info_insert_batch_size: usize,
 }
 
 /// The section `[server]` in `risingwave.toml`.
@@ -865,7 +869,7 @@ pub struct StorageConfig {
     #[serde(default = "default::storage::mem_table_spill_threshold")]
     pub mem_table_spill_threshold: usize,
 
-    /// The concurrent uploading number of `SSTables` of buidler
+    /// The concurrent uploading number of `SSTables` of builder
     #[serde(default = "default::storage::compactor_concurrent_uploading_sst_count")]
     pub compactor_concurrent_uploading_sst_count: Option<usize>,
 
@@ -2034,6 +2038,10 @@ pub mod default {
 
         pub fn hummock_time_travel_sst_info_fetch_batch_size() -> usize {
             10_000
+        }
+
+        pub fn hummock_time_travel_sst_info_insert_batch_size() -> usize {
+            100
         }
 
         pub fn memory_controller_threshold_aggressive() -> f64 {
