@@ -340,6 +340,10 @@ impl stream_plan::FragmentTypeFlag {
     pub fn rate_limit_fragments() -> i32 {
         Self::backfill_rate_limit_fragments() | Self::source_rate_limit_fragments()
     }
+
+    pub fn dml_rate_limit_fragments() -> i32 {
+        stream_plan::FragmentTypeFlag::Dml as i32
+    }
 }
 
 impl stream_plan::Dispatcher {
@@ -501,7 +505,7 @@ mod tests {
         data_type.is_nullable = true;
         let field = Field {
             data_type: Some(data_type),
-            name: "".to_string(),
+            name: "".to_owned(),
         };
         assert!(field.get_data_type().unwrap().is_nullable);
     }

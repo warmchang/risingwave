@@ -113,6 +113,10 @@ pub enum AlterTableOperation {
     SetBackfillRateLimit {
         rate_limit: i32,
     },
+    /// `SET DML_RATE_LIMIT TO <rate_limit>`
+    SetDmlRateLimit {
+        rate_limit: i32,
+    },
     /// `SWAP WITH <table_name>`
     SwapRenameTable {
         target_table: ObjectName,
@@ -325,6 +329,9 @@ impl fmt::Display for AlterTableOperation {
             }
             AlterTableOperation::SetBackfillRateLimit { rate_limit } => {
                 write!(f, "SET BACKFILL_RATE_LIMIT TO {}", rate_limit)
+            }
+            AlterTableOperation::SetDmlRateLimit { rate_limit } => {
+                write!(f, "SET DML_RATE_LIMIT TO {}", rate_limit)
             }
             AlterTableOperation::SwapRenameTable { target_table } => {
                 write!(f, "SWAP WITH {}", target_table)
@@ -676,7 +683,7 @@ impl fmt::Display for ColumnDef {
             if let Some(data_type) = &self.data_type {
                 data_type.to_string()
             } else {
-                "None".to_string()
+                "None".to_owned()
             }
         )?;
         for option in &self.options {
