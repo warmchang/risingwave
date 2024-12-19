@@ -18,10 +18,9 @@ use std::sync::Arc;
 use itertools::Itertools;
 use risingwave_common::catalog::TableId;
 use risingwave_common::config::default::compaction_config;
-use risingwave_common::hash::VirtualNode;
 use risingwave_common::system_param::reader::SystemParamsRead;
 use risingwave_hummock_sdk::change_log::ChangeLogDelta;
-use risingwave_hummock_sdk::compaction_group::group_split::{self, split_sst};
+use risingwave_hummock_sdk::compaction_group::group_split::split_sst_with_table_ids;
 use risingwave_hummock_sdk::sstable_info::SstableInfo;
 use risingwave_hummock_sdk::table_stats::{
     add_prost_table_stats_map, purge_prost_table_stats, to_prost_table_stats_map, PbTableStatsMap,
@@ -248,12 +247,6 @@ impl HummockManager {
                 .time_travel_snapshot_interval_counter
                 .saturating_add(1);
         }
-        let group_parents = version
-            .latest_version()
-            .levels
-            .values()
-            .map(|g| (g.group_id, g.parent_group_id))
-            .collect();
         let time_travel_tables_to_commit =
             table_compaction_group_mapping
                 .iter()
@@ -262,13 +255,22 @@ impl HummockManager {
                         .get(table_id)
                         .map(|committed_epoch| (table_id, cg_id, *committed_epoch))
                 });
+        let time_travel_table_ids: HashSet<_> = self
+            .metadata_manager
+            .catalog_controller
+            .list_time_travel_table_ids()
+            .await
+            .map_err(|e| Error::Internal(e.into()))?
+            .into_iter()
+            .map(|id| id.try_into().unwrap())
+            .collect();
         let mut txn = self.env.meta_store_ref().conn.begin().await?;
         let version_snapshot_sst_ids = self
             .write_time_travel_metadata(
                 &txn,
                 time_travel_version,
                 time_travel_delta,
-                &group_parents,
+                time_travel_table_ids,
                 &versioning.last_time_travel_snapshot_sst_ids,
                 time_travel_tables_to_commit,
             )
@@ -376,8 +378,6 @@ impl HummockManager {
 
         for (mut sst, group_table_ids) in sst_to_cg_vec {
             let len = group_table_ids.len();
-            let mut group_table_ids = group_table_ids.into_iter().collect_vec();
-            group_table_ids.sort_by_key(|(_, table_ids)| table_ids[0]);
             for (index, (group_id, match_ids)) in group_table_ids.into_iter().enumerate() {
                 if sst.sst_info.table_ids == match_ids {
                     // The SST contains all the tables in the group should be last key
@@ -404,39 +404,19 @@ impl HummockManager {
                     })
                     .sum();
 
-                let sstable_info = sst.sst_info;
-                let sst_id = sstable_info.sst_id;
-                let object_id = sstable_info.object_id;
-                let right_sst_size = origin_sst_size.checked_sub(new_sst_size).unwrap_or_else(|| {
-                    panic!(
-                        "group_id {} sst_id {} object_id {} is not split correctly, new_sst_size {} is larger than origin_sst_size {} match_ids {:?} table_stats {:?}",
-                        group_id, sst_id, object_id, new_sst_size, origin_sst_size, match_ids, sst.table_stats
-                    );
-                });
-                let (left, right) = split_sst(
-                    sstable_info,
+                let (modified_sst_info, branch_sst) = split_sst_with_table_ids(
+                    &sst.sst_info,
                     &mut new_sst_id,
-                    group_split::build_split_key(*match_ids.last().unwrap() + 1, VirtualNode::ZERO),
+                    origin_sst_size - new_sst_size,
                     new_sst_size,
-                    right_sst_size,
+                    match_ids,
                 );
+                sst.sst_info = modified_sst_info;
 
                 commit_sstables
                     .entry(group_id)
                     .or_default()
-                    .push(left.unwrap_or_else(|| {
-                        panic!(
-                            "group_id {} sst_id {} object_id {} is not split correctly, left part is missing ",
-                            group_id, sst_id, object_id
-                        );
-                    }));
-
-                sst.sst_info = right.unwrap_or_else(|| {
-                    panic!(
-                        "group_id {} sst_id {} object_id {} is not split correctly, right part is missing ",
-                        group_id, sst_id, object_id
-                    );
-                });
+                    .push(branch_sst);
             }
         }
 
