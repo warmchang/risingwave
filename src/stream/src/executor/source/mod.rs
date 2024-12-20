@@ -24,7 +24,7 @@ use risingwave_common::array::StreamChunk;
 use risingwave_common::bail;
 use risingwave_common::row::Row;
 use risingwave_connector::error::ConnectorError;
-use risingwave_connector::source::{BoxChunkSourceStream, SourceColumnDesc, SplitId};
+use risingwave_connector::source::{BoxSourceChunkStream, SourceColumnDesc, SplitId};
 use risingwave_pb::plan_common::additional_column::ColumnType;
 use risingwave_pb::plan_common::AdditionalColumn;
 pub use state_table_handler::*;
@@ -53,6 +53,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
 
 use crate::executor::error::StreamExecutorError;
+use crate::executor::utils::compute_rate_limit_chunk_permits;
 use crate::executor::{Barrier, Message};
 
 /// Receive barriers from barrier manager with the channel, error on channel close.
@@ -75,7 +76,7 @@ pub fn get_split_offset_mapping_from_chunk(
         let (_, row, _) = chunk.row_at(i);
         let split_id = row.datum_at(split_idx).unwrap().into_utf8().into();
         let offset = row.datum_at(offset_idx).unwrap().into_utf8();
-        split_offset_mapping.insert(split_id, offset.to_string());
+        split_offset_mapping.insert(split_id, offset.to_owned());
     }
     Some(split_offset_mapping)
 }
@@ -119,7 +120,7 @@ pub fn prune_additional_cols(
 }
 
 #[try_stream(ok = StreamChunk, error = ConnectorError)]
-pub async fn apply_rate_limit(stream: BoxChunkSourceStream, rate_limit_rps: Option<u32>) {
+pub async fn apply_rate_limit(stream: BoxSourceChunkStream, rate_limit_rps: Option<u32>) {
     if rate_limit_rps == Some(0) {
         // block the stream until the rate limit is reset
         let future = futures::future::pending::<()>();
@@ -135,24 +136,6 @@ pub async fn apply_rate_limit(stream: BoxChunkSourceStream, rate_limit_rps: Opti
         )
     });
 
-    fn compute_chunk_permits(chunk: &StreamChunk, limit: usize) -> usize {
-        let chunk_size = chunk.capacity();
-        let ends_with_update = if chunk_size >= 2 {
-            // Note we have to check if the 2nd last is `U-` to be consistenct with `StreamChunkBuilder`.
-            // If something inconsistent happens in the stream, we may not have `U+` after this `U-`.
-            chunk.ops()[chunk_size - 2].is_update_delete()
-        } else {
-            false
-        };
-        if chunk_size == limit + 1 && ends_with_update {
-            // If the chunk size exceed limit because of the last `Update` operation,
-            // we should minus 1 to make sure the permits consumed is within the limit (max burst).
-            chunk_size - 1
-        } else {
-            chunk_size
-        }
-    }
-
     #[for_await]
     for chunk in stream {
         let chunk = chunk?;
@@ -167,7 +150,7 @@ pub async fn apply_rate_limit(stream: BoxChunkSourceStream, rate_limit_rps: Opti
         let limiter = limiter.as_ref().unwrap();
         let limit = rate_limit_rps.unwrap() as usize;
 
-        let required_permits = compute_chunk_permits(&chunk, limit);
+        let required_permits = compute_rate_limit_chunk_permits(&chunk, limit);
         if required_permits <= limit {
             let n = NonZeroU32::new(required_permits as u32).unwrap();
             // `InsufficientCapacity` should never happen because we have check the cardinality
@@ -176,7 +159,8 @@ pub async fn apply_rate_limit(stream: BoxChunkSourceStream, rate_limit_rps: Opti
         } else {
             // Cut the chunk into smaller chunks
             for chunk in chunk.split(limit) {
-                let n = NonZeroU32::new(compute_chunk_permits(&chunk, limit) as u32).unwrap();
+                let n = NonZeroU32::new(compute_rate_limit_chunk_permits(&chunk, limit) as u32)
+                    .unwrap();
                 // chunks split should have effective chunk size <= limit
                 limiter.until_n_ready(n).await.unwrap();
                 yield chunk;

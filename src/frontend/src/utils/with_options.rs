@@ -182,7 +182,7 @@ impl WithOptions {
             Ok(inner)
         } else {
             Err(RwError::from(ErrorCode::InvalidParameterValue(
-                "Secret reference is not allowed in OAuth options".to_string(),
+                "Secret reference is not allowed in OAuth options".to_owned(),
             )))
         }
     }
@@ -219,8 +219,7 @@ pub(crate) fn resolve_connection_ref_and_secret_ref(
                 Some(params.clone())
             } else {
                 return Err(RwError::from(ErrorCode::InvalidParameterValue(
-                    "Private Link Service has been deprecated. Please create a new connection instead."
-                        .to_string(),
+                    "Private Link Service has been deprecated. Please create a new connection instead.".to_owned(),
         )));
             }
         };
@@ -235,7 +234,7 @@ pub(crate) fn resolve_connection_ref_and_secret_ref(
             {
                 connection_params.as_ref().map(|cp| {
                     jsonbb::json!({
-                        "connection_type": cp.connection_type().as_str_name().to_string()
+                        "connection_type": cp.connection_type().as_str_name().to_owned()
                     })
                 })
             },
@@ -304,6 +303,22 @@ pub(crate) fn resolve_connection_ref_and_secret_ref(
                 ))));
             }
         }
+
+        {
+            // check if not mess up with schema registry connection and glue connection
+            if connection_type == PbConnectionType::SchemaRegistry {
+                // Check no AWS related options when using schema registry connection
+                if options
+                    .keys()
+                    .chain(inner_secret_refs.keys())
+                    .any(|k| k.starts_with("aws"))
+                {
+                    return Err(RwError::from(ErrorCode::InvalidParameterValue(
+                            "Glue related options/secrets are not allowed when using schema registry connection".to_owned()
+                        )));
+                }
+            }
+        }
     }
 
     // connection_params is None means the connection is not retrieved, so the connection type should be unspecified
@@ -352,7 +367,7 @@ pub(crate) fn resolve_privatelink_in_with_option(
     if let Some(endpoint) = privatelink_endpoint {
         if !is_kafka {
             return Err(RwError::from(ErrorCode::ProtocolError(
-                "Privatelink is only supported in kafka connector".to_string(),
+                "Privatelink is only supported in kafka connector".to_owned(),
             )));
         }
         insert_privatelink_broker_rewrite_map(with_options.inner_mut(), None, Some(endpoint))

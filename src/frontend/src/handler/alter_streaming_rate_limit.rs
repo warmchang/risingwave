@@ -64,7 +64,7 @@ pub async fn handle_alter_streaming_rate_limit(
                 {
                     return Err(InvalidInputSyntax(
                         "PAUSE or RESUME is invalid when the stream has pre configured ratelimit."
-                            .to_string(),
+                            .to_owned(),
                     )
                     .into());
                 }
@@ -94,6 +94,16 @@ pub async fn handle_alter_streaming_rate_limit(
                     "\"{table_name}\" is not a table",
                 ))
                 .into());
+            }
+            session.check_privilege_for_drop_alter(schema_name, &**table)?;
+            (StatementType::ALTER_TABLE, table.id.table_id)
+        }
+        PbThrottleTarget::TableDml => {
+            let reader = session.env().catalog_reader().read_guard();
+            let (table, schema_name) =
+                reader.get_created_table_by_name(db_name, schema_path, &real_table_name)?;
+            if table.table_type != TableType::Table {
+                return Err(InvalidInputSyntax(format!("\"{table_name}\" is not a table",)).into());
             }
             session.check_privilege_for_drop_alter(schema_name, &**table)?;
             (StatementType::ALTER_TABLE, table.id.table_id)

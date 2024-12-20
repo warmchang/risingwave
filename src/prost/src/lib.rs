@@ -221,12 +221,20 @@ impl stream_plan::MaterializeNode {
 
 // Encapsulating the use of parallelism.
 impl common::WorkerNode {
-    pub fn parallelism(&self) -> usize {
+    pub fn compute_node_parallelism(&self) -> usize {
         assert_eq!(self.r#type(), WorkerType::ComputeNode);
         self.property
             .as_ref()
             .expect("property should be exist")
             .parallelism as usize
+    }
+
+    pub fn parallelism(&self) -> Option<usize> {
+        if WorkerType::ComputeNode == self.r#type() {
+            Some(self.compute_node_parallelism())
+        } else {
+            None
+        }
     }
 }
 
@@ -339,6 +347,10 @@ impl stream_plan::FragmentTypeFlag {
     /// Note: this doesn't include `FsFetch` created in old versions.
     pub fn rate_limit_fragments() -> i32 {
         Self::backfill_rate_limit_fragments() | Self::source_rate_limit_fragments()
+    }
+
+    pub fn dml_rate_limit_fragments() -> i32 {
+        stream_plan::FragmentTypeFlag::Dml as i32
     }
 }
 
@@ -501,7 +513,7 @@ mod tests {
         data_type.is_nullable = true;
         let field = Field {
             data_type: Some(data_type),
-            name: "".to_string(),
+            name: "".to_owned(),
         };
         assert!(field.get_data_type().unwrap().is_nullable);
     }
