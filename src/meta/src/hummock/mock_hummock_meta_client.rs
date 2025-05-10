@@ -41,9 +41,11 @@ use risingwave_pb::hummock::{
     PbHummockVersion, SubscribeCompactionEventRequest, SubscribeCompactionEventResponse,
     compact_task,
 };
+use risingwave_pb::iceberg_compaction::SubscribeIcebergCompactionEventRequest;
 use risingwave_rpc_client::error::{Result, RpcError};
 use risingwave_rpc_client::{
     CompactionEventItem, HummockMetaClient, HummockMetaClientChangeLogInfo,
+    IcebergCompactionEventItem,
 };
 use thiserror_ext::AsReport;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -265,7 +267,8 @@ impl HummockMetaClient for MockHummockMetaClient {
             .unwrap();
         let _compactor_rx = self
             .hummock_manager
-            .compactor_manager_ref_for_test()
+            .compactor_manager
+            .clone()
             .add_compactor(context_id as _);
 
         let (request_sender, mut request_receiver) =
@@ -384,6 +387,15 @@ impl HummockMetaClient for MockHummockMetaClient {
         _epoch: HummockEpoch,
         _table_id: u32,
     ) -> Result<PbHummockVersion> {
+        unimplemented!()
+    }
+
+    async fn subscribe_iceberg_compaction_event(
+        &self,
+    ) -> Result<(
+        UnboundedSender<SubscribeIcebergCompactionEventRequest>,
+        BoxStream<'static, IcebergCompactionEventItem>,
+    )> {
         unimplemented!()
     }
 }
