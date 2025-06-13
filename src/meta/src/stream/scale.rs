@@ -1572,6 +1572,7 @@ impl ScaleController {
         Ok(())
     }
 
+    #[await_tree::instrument]
     pub async fn post_apply_reschedule(
         &self,
         reschedules: &HashMap<FragmentId, Reschedule>,
@@ -1593,8 +1594,18 @@ impl ScaleController {
                 .running_fragment_parallelisms(Some(reschedules.keys().cloned().collect()))
                 .await?;
             let serving_worker_slot_mapping = Arc::new(ServingVnodeMapping::default());
-            let (upserted, failed) =
-                serving_worker_slot_mapping.upsert(streaming_parallelisms, &workers);
+            let max_serving_parallelism = self
+                .env
+                .session_params_manager_impl_ref()
+                .get_params()
+                .await
+                .batch_parallelism()
+                .map(|p| p.get());
+            let (upserted, failed) = serving_worker_slot_mapping.upsert(
+                streaming_parallelisms,
+                &workers,
+                max_serving_parallelism,
+            );
             if !upserted.is_empty() {
                 tracing::debug!(
                     "Update serving vnode mapping for fragments {:?}.",
@@ -2309,10 +2320,12 @@ pub struct JobReschedulePlan {
 }
 
 impl GlobalStreamManager {
+    #[await_tree::instrument("acquire_reschedule_read_guard")]
     pub async fn reschedule_lock_read_guard(&self) -> RwLockReadGuard<'_, ()> {
         self.scale_controller.reschedule_lock.read().await
     }
 
+    #[await_tree::instrument("acquire_reschedule_write_guard")]
     pub async fn reschedule_lock_write_guard(&self) -> RwLockWriteGuard<'_, ()> {
         self.scale_controller.reschedule_lock.write().await
     }

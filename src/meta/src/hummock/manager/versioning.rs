@@ -25,7 +25,8 @@ use risingwave_hummock_sdk::sstable_info::SstableInfo;
 use risingwave_hummock_sdk::table_stats::add_prost_table_stats_map;
 use risingwave_hummock_sdk::version::{HummockVersion, HummockVersionDelta};
 use risingwave_hummock_sdk::{
-    CompactionGroupId, HummockContextId, HummockSstableId, HummockSstableObjectId, HummockVersionId,
+    CompactionGroupId, HummockContextId, HummockObjectId, HummockSstableId, HummockSstableObjectId,
+    HummockVersionId, get_stale_object_ids,
 };
 use risingwave_pb::common::WorkerNode;
 use risingwave_pb::hummock::write_limits::WriteLimit;
@@ -87,9 +88,13 @@ impl Versioning {
     pub fn get_tracked_object_ids(
         &self,
         min_pinned_version_id: HummockVersionId,
-    ) -> HashSet<HummockSstableObjectId> {
+    ) -> HashSet<HummockObjectId> {
         // object ids in checkpoint version
-        let mut tracked_object_ids = self.checkpoint.version.get_object_ids(false);
+        let mut tracked_object_ids = self
+            .checkpoint
+            .version
+            .get_object_ids(false)
+            .collect::<HashSet<_>>();
         // add object ids added between checkpoint version and current version
         for (_, delta) in self.hummock_version_deltas.range((
             Excluded(self.checkpoint.version.id),
@@ -103,8 +108,7 @@ impl Versioning {
                 .stale_objects
                 .iter()
                 .filter(|(version_id, _)| **version_id >= min_pinned_version_id)
-                .flat_map(|(_, objects)| objects.id.iter())
-                .map(|id| HummockSstableObjectId::from(*id)),
+                .flat_map(|(_, objects)| get_stale_object_ids(objects)),
         );
         tracked_object_ids
     }
