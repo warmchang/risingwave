@@ -20,8 +20,9 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use risingwave_common::config::DefaultParallelism;
 use risingwave_common::hash::VnodeCountCompat;
-use risingwave_common::util::column_index_mapping::ColIndexMapping;
-use risingwave_common::util::stream_graph_visitor::{visit_stream_node, visit_stream_node_mut};
+use risingwave_common::util::stream_graph_visitor::{
+    visit_stream_node_body, visit_stream_node_mut,
+};
 use risingwave_common::{bail, current_cluster_version};
 use risingwave_connector::sink::file_sink::fs::FsSink;
 use risingwave_connector::sink::{CONNECTOR_TYPE_KEY, SinkError};
@@ -30,6 +31,7 @@ use risingwave_meta_model::actor::ActorStatus;
 use risingwave_meta_model::object::ObjectType;
 use risingwave_meta_model::prelude::{StreamingJob as StreamingJobModel, *};
 use risingwave_meta_model::table::TableType;
+use risingwave_meta_model::user_privilege::Action;
 use risingwave_meta_model::*;
 use risingwave_pb::catalog::source::PbOptionalAssociatedTableId;
 use risingwave_pb::catalog::table::PbOptionalAssociatedSourceId;
@@ -56,15 +58,15 @@ use sea_orm::{
 };
 use thiserror_ext::AsReport;
 
+use super::rename::IndexItemRewriter;
 use crate::barrier::{ReplaceStreamJobPlan, Reschedule};
 use crate::controller::ObjectModel;
 use crate::controller::catalog::{CatalogController, DropTableConnectorContext};
-use crate::controller::rename::ReplaceTableExprRewriter;
 use crate::controller::utils::{
     PartialObject, build_object_group_for_delete, check_relation_name_duplicate,
     check_sink_into_table_cycle, ensure_object_id, ensure_user_id, get_fragment_actor_ids,
-    get_fragment_mappings, get_internal_tables_by_id, insert_fragment_relations,
-    rebuild_fragment_mapping_from_actors,
+    get_fragment_mappings, get_internal_tables_by_id, grant_default_privileges_automatically,
+    insert_fragment_relations, list_user_info_by_ids, rebuild_fragment_mapping_from_actors,
 };
 use crate::manager::{NotificationVersion, StreamingJob, StreamingJobType};
 use crate::model::{
@@ -107,6 +109,7 @@ impl CatalogController {
     ///
     /// Some of the fields in the given streaming job are placeholders, which will
     /// be updated later in `prepare_streaming_job` and notify again in `finish_streaming_job`.
+    #[await_tree::instrument]
     pub async fn create_job_catalog(
         &self,
         streaming_job: &mut StreamingJob,
@@ -395,6 +398,7 @@ impl CatalogController {
     // Given that we've ensured the tables inside `TableFragments` are complete, shall we consider
     // making them the source of truth and performing a full replacement for those in the meta store?
     /// Insert fragments and actors to meta store. Used both for creating new jobs and replacing jobs.
+    #[await_tree::instrument("prepare_streaming_job_for_{}", if for_replace { "replace" } else { "create" })]
     pub async fn prepare_streaming_job(
         &self,
         stream_job_fragments: &StreamJobFragmentsToCreate,
@@ -489,6 +493,7 @@ impl CatalogController {
     /// `try_abort_creating_streaming_job` is used to abort the job that is under initial status or in `FOREGROUND` mode.
     /// It returns (true, _) if the job is not found or aborted.
     /// It returns (_, Some(`database_id`)) is the `database_id` of the `job_id` exists
+    #[await_tree::instrument]
     pub async fn try_abort_creating_streaming_job(
         &self,
         job_id: ObjectId,
@@ -639,6 +644,7 @@ impl CatalogController {
         Ok((true, Some(database_id)))
     }
 
+    #[await_tree::instrument]
     pub async fn post_collect_job_fragments(
         &self,
         job_id: ObjectId,
@@ -860,6 +866,7 @@ impl CatalogController {
             })
             .collect_vec();
         let mut notification_op = NotificationOperation::Add;
+        let mut updated_user_info = vec![];
 
         match job_type {
             ObjectType::Table => {
@@ -918,6 +925,54 @@ impl CatalogController {
                         )),
                     });
                 }
+
+                // If the index is created on a table with privileges, we should also
+                // grant the privileges for the index and its state tables.
+                let primary_table_privileges = UserPrivilege::find()
+                    .filter(
+                        user_privilege::Column::Oid
+                            .eq(index.primary_table_id)
+                            .and(user_privilege::Column::Action.eq(Action::Select)),
+                    )
+                    .all(&txn)
+                    .await?;
+                if !primary_table_privileges.is_empty() {
+                    let index_state_table_ids: Vec<TableId> = Table::find()
+                        .select_only()
+                        .column(table::Column::TableId)
+                        .filter(
+                            table::Column::BelongsToJobId
+                                .eq(job_id)
+                                .or(table::Column::TableId.eq(index.index_table_id)),
+                        )
+                        .into_tuple()
+                        .all(&txn)
+                        .await?;
+                    let mut new_privileges = vec![];
+                    for privilege in &primary_table_privileges {
+                        for state_table_id in &index_state_table_ids {
+                            new_privileges.push(user_privilege::ActiveModel {
+                                id: Default::default(),
+                                oid: Set(*state_table_id),
+                                user_id: Set(privilege.user_id),
+                                action: Set(Action::Select),
+                                dependent_id: Set(privilege.dependent_id),
+                                granted_by: Set(privilege.granted_by),
+                                with_grant_option: Set(privilege.with_grant_option),
+                            });
+                        }
+                    }
+                    UserPrivilege::insert_many(new_privileges)
+                        .exec(&txn)
+                        .await?;
+
+                    updated_user_info = list_user_info_by_ids(
+                        primary_table_privileges.into_iter().map(|p| p.user_id),
+                        &txn,
+                    )
+                    .await?;
+                }
+
                 objects.push(PbObject {
                     object_info: Some(PbObjectInfo::Index(ObjectModel(index, obj.unwrap()).into())),
                 });
@@ -951,7 +1006,6 @@ impl CatalogController {
                 let (relations, fragment_mapping, _) = Self::finish_replace_streaming_job_inner(
                     tmp_id as ObjectId,
                     replace_upstream,
-                    None,
                     SinkIntoTableContext {
                         creating_sink_id: Some(incoming_sink_id as _),
                         dropping_sink_id: None,
@@ -968,6 +1022,9 @@ impl CatalogController {
             None => None,
         };
 
+        if job_type != ObjectType::Index {
+            updated_user_info = grant_default_privileges_automatically(&txn, job_id).await?;
+        }
         txn.commit().await?;
 
         self.notify_fragment_mapping(NotificationOperation::Add, fragment_mapping)
@@ -979,6 +1036,11 @@ impl CatalogController {
                 NotificationInfo::ObjectGroup(PbObjectGroup { objects }),
             )
             .await;
+
+        // notify users about the default privileges
+        if !updated_user_info.is_empty() {
+            version = self.notify_users_update(updated_user_info).await;
+        }
 
         if let Some((objects, fragment_mapping)) = replace_table_mapping_update {
             self.notify_fragment_mapping(NotificationOperation::Add, fragment_mapping)
@@ -1009,7 +1071,6 @@ impl CatalogController {
         tmp_id: ObjectId,
         streaming_job: StreamingJob,
         replace_upstream: FragmentReplaceUpstream,
-        col_index_mapping: Option<ColIndexMapping>,
         sink_into_table_context: SinkIntoTableContext,
         drop_table_connector_ctx: Option<&DropTableConnectorContext>,
     ) -> MetaResult<NotificationVersion> {
@@ -1020,7 +1081,6 @@ impl CatalogController {
             Self::finish_replace_streaming_job_inner(
                 tmp_id,
                 replace_upstream,
-                col_index_mapping,
                 sink_into_table_context,
                 &txn,
                 streaming_job,
@@ -1060,7 +1120,6 @@ impl CatalogController {
     pub async fn finish_replace_streaming_job_inner(
         tmp_id: ObjectId,
         replace_upstream: FragmentReplaceUpstream,
-        col_index_mapping: Option<ColIndexMapping>,
         SinkIntoTableContext {
             creating_sink_id,
             dropping_sink_id,
@@ -1077,12 +1136,14 @@ impl CatalogController {
         let original_job_id = streaming_job.id() as ObjectId;
         let job_type = streaming_job.job_type();
 
+        let mut index_item_rewriter = None;
+
         // Update catalog
         match streaming_job {
             StreamingJob::Table(_source, table, _table_job_type) => {
                 // The source catalog should remain unchanged
 
-                let original_table_catalogs = Table::find_by_id(original_job_id)
+                let original_column_catalogs = Table::find_by_id(original_job_id)
                     .select_only()
                     .columns([table::Column::Columns])
                     .into_tuple::<ColumnCatalogArray>()
@@ -1090,11 +1151,29 @@ impl CatalogController {
                     .await?
                     .ok_or_else(|| MetaError::catalog_id_not_found("table", original_job_id))?;
 
+                index_item_rewriter = Some({
+                    let original_columns = original_column_catalogs
+                        .to_protobuf()
+                        .into_iter()
+                        .map(|c| c.column_desc.unwrap())
+                        .collect_vec();
+                    let new_columns = table
+                        .columns
+                        .iter()
+                        .map(|c| c.column_desc.clone().unwrap())
+                        .collect_vec();
+
+                    IndexItemRewriter {
+                        original_columns,
+                        new_columns,
+                    }
+                });
+
                 // For sinks created in earlier versions, we need to set the original_target_columns.
                 for sink_id in updated_sink_catalogs {
                     sink::ActiveModel {
                         sink_id: Set(sink_id as _),
-                        original_target_columns: Set(Some(original_table_catalogs.clone())),
+                        original_target_columns: Set(Some(original_column_catalogs.clone())),
                         ..Default::default()
                     }
                     .update(txn)
@@ -1232,11 +1311,8 @@ impl CatalogController {
             }
             _ => unreachable!("invalid streaming job type for replace: {:?}", job_type),
         }
-        if let Some(table_col_index_mapping) = col_index_mapping {
-            let expr_rewriter = ReplaceTableExprRewriter {
-                table_col_index_mapping,
-            };
 
+        if let Some(expr_rewriter) = index_item_rewriter {
             let index_items: Vec<(IndexId, ExprNodeArray)> = Index::find()
                 .select_only()
                 .columns([index::Column::IndexId, index::Column::IndexItems])
@@ -1992,7 +2068,7 @@ impl CatalogController {
             let mut rate_limit = None;
             let mut node_name = None;
 
-            visit_stream_node(&stream_node, |node| {
+            visit_stream_node_body(&stream_node, |node| {
                 match node {
                     // source rate limit
                     PbNodeBody::Source(node) => {

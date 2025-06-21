@@ -318,7 +318,7 @@ pub struct SyncedKvLogStoreExecutor<S: StateStore> {
     max_buffer_size: usize,
 
     // Max chunk size when reading from logstore / buffer
-    chunk_size: u32,
+    chunk_size: usize,
 
     pause_duration_ms: Duration,
 }
@@ -332,7 +332,7 @@ impl<S: StateStore> SyncedKvLogStoreExecutor<S> {
         serde: LogStoreRowSerde,
         state_store: S,
         buffer_size: usize,
-        chunk_size: u32,
+        chunk_size: usize,
         upstream: Executor,
         pause_duration_ms: Duration,
     ) -> Self {
@@ -539,8 +539,12 @@ impl<S: StateStore> SyncedKvLogStoreExecutor<S> {
             })
             .await;
 
-        let (mut read_state, mut initial_write_state) =
-            new_log_store_state(self.table_id, local_state_store, self.serde);
+        let (mut read_state, mut initial_write_state) = new_log_store_state(
+            self.table_id,
+            local_state_store,
+            self.serde,
+            self.chunk_size,
+        );
         initial_write_state.init(first_write_epoch).await?;
 
         let mut pause_stream = first_barrier.is_pause_on_startup();
@@ -632,6 +636,7 @@ impl<S: StateStore> SyncedKvLogStoreExecutor<S> {
                                             }
                                             let write_state_post_write_barrier =
                                                 Self::write_barrier(
+                                                    self.actor_context.id,
                                                     &mut write_state,
                                                     barrier.clone(),
                                                     &self.metrics,
@@ -643,6 +648,11 @@ impl<S: StateStore> SyncedKvLogStoreExecutor<S> {
                                             let update_vnode_bitmap = barrier
                                                 .as_update_vnode_bitmap(self.actor_context.id);
                                             let barrier_epoch = barrier.epoch;
+                                            tracing::trace!(
+                                                ?update_vnode_bitmap,
+                                                actor_id = self.actor_context.id,
+                                                "update vnode bitmap"
+                                            );
 
                                             yield Message::Barrier(barrier);
 
@@ -886,13 +896,14 @@ impl<S: StateStoreRead> ReadFuture<S> {
 // Write methods
 impl<S: StateStore> SyncedKvLogStoreExecutor<S> {
     async fn write_barrier<'a>(
+        actor_id: u32,
         write_state: &'a mut LogStoreWriteState<S::Local>,
         barrier: Barrier,
         metrics: &SyncedKvLogStoreMetrics,
         progress: LogStoreVnodeProgress,
         buffer: &mut SyncedLogStoreBuffer,
     ) -> StreamExecutorResult<LogStorePostSealCurrentEpoch<'a, S::Local>> {
-        tracing::trace!(?progress, "applying truncation");
+        tracing::trace!(actor_id, ?progress, "applying truncation");
         // TODO(kwannoel): As an optimization we can also change flushed chunks to be flushed items
         // to reduce memory consumption of logstore.
 
@@ -951,7 +962,7 @@ struct SyncedLogStoreBuffer {
     buffer: VecDeque<(u64, LogStoreBufferItem)>,
     current_size: usize,
     max_size: usize,
-    max_chunk_size: u32,
+    max_chunk_size: usize,
     next_chunk_id: ChunkId,
     metrics: SyncedKvLogStoreMetrics,
     flushed_count: usize,
@@ -998,7 +1009,7 @@ impl SyncedLogStoreBuffer {
         new_vnode_bitmap: Bitmap,
         epoch: u64,
     ) {
-        let new_chunk_size = end_seq_id - start_seq_id + 1;
+        let new_chunk_size = (end_seq_id - start_seq_id + 1) as usize;
 
         if let Some((
             item_epoch,
@@ -1009,9 +1020,9 @@ impl SyncedLogStoreBuffer {
                 ..
             },
         )) = self.buffer.back_mut()
-            && let flushed_chunk_size = *prev_end_seq_id - *prev_start_seq_id + 1
+            && let flushed_chunk_size = (*prev_end_seq_id - *prev_start_seq_id + 1) as usize
             && let projected_flushed_chunk_size = flushed_chunk_size + new_chunk_size
-            && projected_flushed_chunk_size as u32 <= self.max_chunk_size
+            && projected_flushed_chunk_size <= self.max_chunk_size
         {
             assert!(
                 *prev_end_seq_id < start_seq_id,
